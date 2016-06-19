@@ -1,0 +1,210 @@
+---
+title: "Appus - Questão 1"
+author: "Lucas Murtinho"
+date: "April 12, 2016"
+output: pdf_document
+  toc: yes
+---
+
+# Preparação
+
+## Pasta
+
+```{r}
+pasta = 'E:/Drive/appus/'
+```
+
+## Carregar módulos
+
+```{r}
+library(ggplot2) # gráficos
+library(lubridate) # datas
+```
+
+## Ler dados
+
+```{r}
+dados = read.csv2(paste0(pasta, "questao1.csv"),
+                  colClasses=c(rep("factor", 2), "character", "factor",
+                               "character", rep("factor", 2), "character",
+                               rep("factor", 2), "factor", rep("numeric", 3)))
+```
+
+# Limpeza de dados
+
+## Primeira vista
+
+```{r}
+str(dados)
+```
+
+## Apagar última coluna
+
+```{r}
+dados = dados[,-ncol(dados)]
+```
+
+
+## Data de nascimento
+
+```{r}
+nasc_1 = as.Date(dados$Data.de.nascimento, "%d/%m/%Y")
+nasc_2 = as.Date(dados$Data.de.nascimento, "%m/%d/%y")
+
+dados$Data.de.nascimento = as.Date(nasc_1)
+
+dados$Data.de.nascimento[is.na(dados$Data.de.nascimento)] = 
+  as.Date(nasc_2[is.na(dados$Data.de.nascimento)])
+
+summary(dados$Data.de.nascimento)
+
+ggplot() + aes(dados$Data.de.nascimento) +
+  geom_histogram(col="black", fill="white") + theme_bw()
+
+hist(as.Date(dados$Data.de.nascimento), breaks=30)
+
+year(dados$Data.de.nascimento) = 
+  year(dados$Data.de.nascimento) - 
+  ifelse(year(dados$Data.de.nascimento)>2000,
+         100, 0)
+
+summary(dados$Data.de.nascimento)
+ggplot() + aes(dados$Data.de.nascimento) +
+  geom_histogram(col="black", fill="white") + theme_bw()
+
+sum(year(dados$Data.de.nascimento)<1930)
+
+nascimento_errado = dados[which(year(dados$Data.de.nascimento)<1930),]
+
+dados = dados[-which(year(dados$Data.de.nascimento)<1930),]
+dim(dados)
+
+```
+
+## Data de admissão
+
+```{r}
+
+admis_1 = as.Date(dados$Data.de.admissão, "%d/%m/%Y")
+admis_2 = as.Date(dados$Data.de.admissão, "%m/%d/%y")
+
+dados$Data.de.admissão = as.Date(admis_1)
+
+dados$Data.de.admissão[is.na(dados$Data.de.admissão)] = 
+  as.Date(admis_2[is.na(dados$Data.de.admissão)])
+
+summary(dados$Data.de.admissão)
+
+ggplot() + aes(dados$Data.de.admissão) +
+  geom_histogram(col="black", fill="white") + theme_bw()
+
+year(dados$Data.de.admissão) = 
+  year(dados$Data.de.admissão) - 
+  ifelse(year(dados$Data.de.admissão)>=2068,
+         100, 0)
+
+summary(dados$Data.de.admissão)
+ggplot() + aes(dados$Data.de.admissão) +
+  geom_histogram(col="black", fill="white") + theme_bw()
+
+table(dados$Área[(dados$Data.de.nascimento+years(10))>dados$Data.de.admissão])
+
+admissao_errada = dados[which(dados$Data.de.nascimento+years(10)>dados$Data.de.admissão),]
+
+dados = dados[-which(dados$Data.de.nascimento+years(10)>dados$Data.de.admissão),]
+
+```
+
+## Salário mensal médio
+
+```{r}
+
+dados$Salário.mensal.médio = gsub("[^0-9,]", "", dados$Salário.mensal.médio)
+dados$Salário.mensal.médio = gsub(",", ".", dados$Salário.mensal.médio)
+dados$Salário.mensal.médio = as.numeric(dados$Salário.mensal.médio)
+
+summary(dados$Salário.mensal.médio)
+ggplot() + aes(dados$Salário.mensal.médio) +
+  geom_histogram(col="black", fill="white") + theme_bw()
+
+sum(dados$Salário.mensal.médio>50000)
+dados$Área[dados$Salário.mensal.médio>50000]
+```
+
+## Avaliação de desempenho
+
+```{r}
+head(dados$Avaliação.de.desempenho)
+
+table(levels(dados$Avaliação.de.desempenho))
+
+dados$Avaliação.de.desempenho = 
+  factor(dados$Avaliação.de.desempenho,
+         levels=c("INSATISFATORIO",
+                  "BOM", "OTIMO",
+                  "EXCELENTE"),
+         ordered=TRUE)
+
+head(dados$Avaliação.de.desempenho)
+```
+
+# Exploração dos dados
+
+## ex-trainee
+
+```{r}
+table(dados$Ex.trainee)
+table(dados$Desligamento, dados$Ex.trainee)
+```
+
+## Data de nascimento
+
+```{r}
+ggplot(data = dados, aes(x = Desligamento, y = Data.de.nascimento)) + 
+  geom_boxplot() + theme_bw()
+```
+
+## Sexo
+
+```{r}
+table(dados$Sexo)
+table(dados$Desligamento, dados$Sexo)
+t(apply(table(dados$Desligamento, dados$Sexo), 1, function (x) x/table(dados$Sexo)))
+```
+
+## Data de admissão
+
+```{r}
+ggplot(data = dados, aes(x = Desligamento, y = Data.de.admissão)) + 
+  geom_boxplot() + theme_bw()
+```
+
+```{r}
+table(dados$Desligamento, dados$Data.de.admissão<median(dados$Data.de.admissão))
+t(apply(table(dados$Desligamento, dados$Data.de.admissão<median(dados$Data.de.admissão)), 
+              1, function (x) x/table(dados$Data.de.admissão<median(dados$Data.de.admissão))))
+```
+
+## CARGO
+
+## Área
+
+```{r}
+table(dados$Desligamento, dados$Área)
+t(apply(table(dados$Desligamento, dados$Área), 
+              1, function (x) x/table(dados$Área)))
+```
+
+## Salário mensal médio
+
+```{r}
+summary(dados$Salário.mensal.médio[dados$Desligamento=='0'])
+summary(dados$Salário.mensal.médio[dados$Desligamento=='1'])
+
+ggplot(data = dados, aes(x = Área, y = Salário.mensal.médio)) + 
+  geom_boxplot() + theme_bw()
+
+ggplot(data = dados, aes(x = Avaliação.de.desempenho, y = Salário.mensal.médio)) + 
+  geom_boxplot() + theme_bw()
+```
+

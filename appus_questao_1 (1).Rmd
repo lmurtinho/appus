@@ -1,0 +1,404 @@
+---
+title: "Appus - Questão 1"
+author: "Lucas Murtinho"
+date: "April 12, 2016"
+output: pdf_document
+  toc: yes
+---
+
+# Preparação
+
+## Pasta
+
+```{r}
+rm(list=ls())
+pasta = 'C:/Users/zsj7/Desktop/appus/'
+```
+
+## Carregar módulos
+
+```{r}
+library(glmnet)
+library(ggplot2) # gráficos
+library(lubridate) # datas
+```
+
+## Opções de gráfico
+
+```{r}
+theme_set(theme_bw())
+```
+
+## Ler dados
+
+```{r}
+dados = read.csv2(paste0(pasta, "questao1.csv"),
+                  colClasses=c(rep("factor", 2), "character", "factor",
+                               "character", rep("factor", 2), "character",
+                               rep("factor", 2), "factor", rep("numeric", 3)))
+names(dados)
+
+names(dados) = c("desligamento",
+                 "ex_trainee",
+                 "data_nascimento",
+                 "sexo",
+                 "data_admissao",
+                 "cargo",
+                 "area",
+                 "salario",
+                 "pos_critica",
+                 "gestor",
+                 "aval",
+                 "dist",
+                 "tempo",
+                 "turnover")
+
+
+```
+
+# Limpeza de dados
+
+## Primeira vista
+
+```{r}
+str(dados)
+```
+
+## Apagar última coluna
+
+```{r}
+dados = dados[,-ncol(dados)]
+```
+
+
+## Data de nascimento
+
+```{r}
+nasc_1 = as.Date(dados$data_nascimento, "%d/%m/%Y")
+nasc_2 = as.Date(dados$data_nascimento, "%m/%d/%y")
+
+dados$data_nascimento = as.Date(nasc_1)
+
+dados$data_nascimento[is.na(dados$data_nascimento)] = 
+  as.Date(nasc_2[is.na(dados$data_nascimento)])
+
+summary(dados$data_nascimento)
+
+ggplot() + aes(dados$data_nascimento) +
+  geom_histogram(col="black", fill="white") +
+  ggtitle("histograma de datas de nascimento") +
+  xlab("data") +
+  ylab("frequência")
+
+year(dados$data_nascimento) = 
+  year(dados$data_nascimento) - 
+  ifelse(year(dados$data_nascimento)>2000,
+         100, 0)
+
+summary(dados$data_nascimento)
+ggplot() + aes(dados$data_nascimento) +
+  geom_histogram(col="black", fill="white") +
+  ggtitle("histograma de datas de nascimento") +
+  xlab("data") +
+  ylab("frequência")
+
+sum(year(dados$data_nascimento)<1930)
+
+nascimento_errado = dados[which(year(dados$data_nascimento)<1930),]
+
+dados = dados[-which(year(dados$data_nascimento)<1930),]
+dim(dados)
+
+```
+
+## Data de admissão
+
+```{r}
+
+admis_1 = as.Date(dados$data_admissao, "%d/%m/%Y")
+admis_2 = as.Date(dados$data_admissao, "%m/%d/%y")
+
+dados$data_admissao = as.Date(admis_1)
+
+dados$data_admissao[is.na(dados$data_admissao)] = 
+  as.Date(admis_2[is.na(dados$data_admissao)])
+
+summary(dados$data_admissao)
+
+ggplot() + aes(dados$data_admissao) +
+  geom_histogram(col="black", fill="white") +
+  ggtitle("histograma de datas de admissão") +
+  xlab("data") +
+  ylab("frequência")
+
+year(dados$data_admissao) = 
+  year(dados$data_admissao) - 
+  ifelse(year(dados$data_admissao)>=2068, 100, 0)
+
+summary(dados$data_admissao)
+
+ggplot() + aes(dados$data_admissao) +
+  geom_histogram(col="black", fill="white") +
+  ggtitle("histograma de datas de admissão") +
+  xlab("data") +
+  ylab("frequência")
+
+table(dados$area[(dados$data_nascimento+years(10))>dados$data_admissao])
+
+admissao_errada = dados[which(dados$data_nascimento+years(10)>dados$data_admissao),]
+
+dados = dados[-which(dados$data_nascimento+years(10)>dados$data_admissao),]
+
+```
+
+## Salário mensal médio
+
+```{r}
+
+dados$salario = gsub("[^0-9,]", "", dados$salario)
+dados$salario = gsub(",", ".", dados$salario)
+dados$salario = as.numeric(dados$salario)
+
+summary(dados$salario)
+
+qplot(x=1, y=dados$salario, geom="boxplot", ylim=c(0,10000))
+
+ggplot() + aes(dados$salario[dados$salario<10000]) +
+  geom_histogram(col="black", fill="white") +
+  ggtitle("histograma de salário mensal médio") +
+  xlab("R$") +
+  ylab("frequência")
+
+sum(dados$salario>50000)
+dados$salario[dados$salario>50000]
+```
+
+## Avaliação de desempenho
+
+```{r}
+head(dados$aval)
+
+table(levels(dados$aval))
+
+dados$aval = 
+  factor(dados$aval,
+         levels=c("INSATISFATORIO",
+                  "BOM", "OTIMO",
+                  "EXCELENTE"),
+         ordered=TRUE)
+
+head(dados$aval)
+```
+
+# Exploração dos dados
+
+## ex-trainee
+
+```{r}
+table(dados$ex_trainee)
+table(dados$desligamento, dados$ex_trainee)
+```
+
+## Data de nascimento
+
+```{r}
+ggplot(data = dados, aes(x = desligamento, y = data_nascimento)) + 
+  geom_boxplot() +
+  ggtitle("datas de nascimento por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("data")
+```
+
+## Sexo
+
+```{r}
+table(dados$sexo)
+table(dados$desligamento, dados$sexo)
+t(apply(table(dados$desligamento, dados$sexo), 1, function (x) x/table(dados$sexo)))
+```
+
+## Data de admissão
+
+```{r}
+ggplot(data = dados, aes(x = desligamento, y = data_admissao)) + 
+  geom_boxplot() +
+  ggtitle("datas de admissão por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("data")
+```
+
+```{r}
+table(dados$desligamento, dados$data_admissao<median(dados$data_admissao))
+t(apply(table(dados$desligamento, 
+              dados$data_admissao<median(dados$data_admissao)),
+        1, 
+        function (x) x /
+          table(dados$data_admissao<median(dados$data_admissao))))
+```
+
+## CARGO
+
+```{r}
+ggplot() + aes(as.vector(table(dados$cargo))) + 
+  geom_histogram(col="black", fill="white") +
+  ggtitle("quantidade de funcionários por cargo") +
+  xlab("cargo") +
+  ylab("nº de funcionários")
+
+table(dados$cargo)
+table(dados$desligamento, dados$cargo)
+t(apply(table(dados$desligamento, dados$cargo), 
+              1, function (x) x/table(dados$cargo)))
+
+dados$cargo_num = as.numeric(dados$cargo)
+
+ggplot(data=dados) + aes(x=desligamento, y=cargo_num) + geom_boxplot()
+```
+
+
+## Área
+
+```{r}
+table(dados$desligamento, dados$area)
+t(apply(table(dados$desligamento, dados$area), 
+              1, function (x) x/table(dados$area)))
+```
+
+## Salário mensal médio
+
+```{r}
+summary(dados$salario[dados$desligamento=='0'])
+summary(dados$salario[dados$desligamento=='1'])
+
+ggplot(data = dados, aes(x = area, y = salario)) + 
+  geom_boxplot() +
+  ggtitle("salário por área") +
+  xlab("área") +
+  ylab("R$")
+
+ggplot(data = dados, aes(x = desligamento, y = salario)) + 
+  geom_boxplot() + scale_y_continuous(limits=c(0, 50000)) +
+  ggtitle("salário por chave de desligamento") +
+  xlab("desligamento") +
+  ylab("R$")
+
+ggplot(data = dados, aes(x = aval, y = salario)) + 
+  geom_boxplot() + scale_y_continuous(limits=c(0, 50000)) +
+  ggtitle("salário por avaliação") +
+  xlab("avaliação") +
+  ylab("R$")
+
+ggplot(data = dados, aes(x = aval, y = salario, fill = area)) + 
+  geom_boxplot() + scale_y_continuous(limits=c(0, 50000)) +
+  ggtitle("salário por avaliação e por área") +
+  xlab("avaliação") +
+  ylab("R$")
+
+
+```
+
+## Posição crítica
+
+```{r}
+table(dados$pos_critica)
+table(dados$desligamento, dados$pos_critica)
+t(apply(table(dados$desligamento, dados$pos_critica), 
+              1, function (x) x / table(dados$pos_critica)))
+```
+
+## GESTOR
+
+```{r}
+ggplot() + aes(as.vector(table(dados$gestor))) + 
+  geom_histogram(col="black", fill="white") +
+  ggtitle("quantidade de funcionários por gestor") +
+  xlab("gestor") +
+  ylab("nº de funcionários")
+
+table(dados$gestor)
+table(dados$desligamento, dados$gestor)
+t(apply(table(dados$desligamento, dados$gestor), 
+              1, function (x) x/table(dados$gestor)))
+
+dados$gestor_num = as.numeric(dados$gestor)
+
+ggplot(data=dados) + aes(x=desligamento, y=gestor_num) + geom_boxplot()
+
+```
+
+
+## Distância do trabalho
+
+```{r}
+summary(dados$dist[dados$desligamento=='0'])
+summary(dados$dist[dados$desligamento=='1'])
+
+ggplot(data = dados, aes(x = desligamento, y = dist)) + 
+  geom_boxplot() +
+  ggtitle("distância do trabalho por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("km")
+
+```
+
+## Tempo para chegar no trabalho (COLINEARIDADE COM DISTÂNCIA)
+
+```{r}
+summary(dados$tempo[dados$desligamento=='0'])
+summary(dados$tempo[dados$desligamento=='1'])
+
+ggplot(data = dados, aes(x = desligamento, 
+                         y = tempo)) + 
+  geom_boxplot() +
+  ggtitle("tempo para chegar ao trabalho por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("minutos")
+
+
+qplot(dados$dist, dados$tempo) +   
+  ggtitle("distância e tempo para chegar ao trabalho") +
+  xlab("km") +
+  ylab("minutos")
+
+```
+
+## Turnover mercado
+
+```{r}
+summary(dados$turnover[dados$desligamento=='0'])
+summary(dados$turnover[dados$desligamento=='1'])
+
+ggplot(data = dados, aes(x = desligamento, y = turnover)) + 
+  geom_boxplot() +
+  ggtitle("turnover de mercado por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("%")
+
+```
+
+# Análise
+
+## Regressão logística com seleção de variáveis
+
+```{r}
+indices_retirar = sapply(c("cargo", "gestor"),
+                         function (x) which(x==names(dados)))
+
+dados2 = dados[,-indices_retirar]
+
+X = model.matrix(desligamento~., dados2)
+y = dados$desligamento
+
+cvlogreg = cv.glmnet(X, y, family='binomial', alpha=1)
+
+
+```
+
+```{r xgboost}
+
+dtrain = xgb.DMatrix(data=X, label=y)
+xgb1 = xgboost(X, y, nrounds=1000)
+
+xgbcv1
+```
+

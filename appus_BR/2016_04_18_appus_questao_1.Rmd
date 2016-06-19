@@ -1,0 +1,777 @@
+---
+title: "Appus - Questão 1"
+author: "Lucas Murtinho"
+date: "April 12, 2016"
+output: pdf_document
+  toc: yes
+---
+
+# Preparação
+
+## Semente aleatória
+
+Começamos definindo uma semente aleatória para garantir a reproducibilidade dos resultados.
+
+```{r semente}
+set.seed(1)
+```
+
+## Pasta
+
+Pasta onde está o arquivo .csv com os dados.
+
+```{r pasta}
+rm(list=ls())
+pasta = 'C:/Users/zsj7/Desktop/appus/'
+#pasta = "/Users/lucasmurtinho/Documents/appus/"
+```
+
+## Carregar módulos
+
+Módulos utilizados na análise.
+
+```{r modulos}
+library(Boruta) # seleção de variáveis
+library(caret) # tratamento de dados e seleção de hiperparâmetros
+library(glmnet) # modelos lineares generalizados (regressão logística)
+library(ggplot2) # gráficos
+library(lubridate) # datas
+library(ROCR) # análise de performance
+library(xgboost) # árvore de decisão com extreme gradient boosting
+```
+
+## Opções de gráfico
+
+Layout dos gráficos.
+
+```{r tema_graficos}
+theme_set(theme_bw())
+```
+
+## Ler dados
+
+Leitura dos dados, com as categorias definidas no documento sobre os dados e colunas renomeadas.
+
+```{r ler_dados}
+dados = read.csv2(paste0(pasta, "questao1.csv"),
+                  colClasses=c(rep("factor", 2), "character", "factor",
+                               "character", rep("factor", 2), "character",
+                               rep("factor", 2), "factor", rep("numeric", 3)),
+                  fileEncoding = 'ISO-8859-1')
+
+names(dados) = c("desligamento",
+                 "ex_trainee",
+                 "data_nascimento",
+                 "sexo",
+                 "data_admissao",
+                 "cargo",
+                 "area",
+                 "salario",
+                 "pos_critica",
+                 "gestor",
+                 "aval",
+                 "dist",
+                 "tempo",
+                 "turnover")
+
+
+```
+
+# Limpeza de dados
+
+## Primeira vista
+
+```{r estrutura_dados}
+str(dados)
+```
+
+Existe uma coluna extra no fim da tabela de dados, podemos retirá-la:
+
+```{r remover_dados}
+dados = dados[,-ncol(dados)]
+```
+
+
+## Data de nascimento
+
+As datas de nascimento precisam ser transformadas de string para formatos de data, mas há dois formatos diferentes. Vou criar dois vetores e transformar os dados suas vezes. 
+
+```{r data_nasc_transforma}
+nasc_1 = as.Date(dados$data_nascimento, "%d/%m/%Y")
+nasc_2 = as.Date(dados$data_nascimento, "%m/%d/%y")
+
+dados$data_nascimento = as.Date(nasc_1)
+
+dados$data_nascimento[is.na(dados$data_nascimento)] = 
+  as.Date(nasc_2[is.na(dados$data_nascimento)])
+
+```
+
+Podemos ver o resultado da transformação:
+
+```{r data_nasc_graf_1}
+
+summary(dados$data_nascimento)
+
+ggplot() + aes(dados$data_nascimento) +
+  geom_histogram(col="black", fill="white") +
+  ggtitle("histograma de datas de nascimento") +
+  xlab("data") +
+  ylab("frequência")
+
+
+```
+
+A função `as.Date()` transformou algumas strings (com dois dígitos para o ano) em anos no século 21, quando na verdade se tratam de números no século 20. Corrijo isso abaixo:
+
+```{r data_nasc_corrige_anos}
+
+year(dados$data_nascimento) = 
+  year(dados$data_nascimento) - 
+  ifelse(year(dados$data_nascimento)>2000,
+         100, 0)
+
+summary(dados$data_nascimento)
+ggplot() + aes(dados$data_nascimento) +
+  geom_histogram(col="black", fill="white") +
+  ggtitle("histograma de datas de nascimento") +
+  xlab("data") +
+  ylab("frequência")
+
+
+```
+
+O valor mínimo é abaixo do esperado. Quantos valores estão abaixo de 1930?
+
+```{r data_nasc_valores_baixos}
+sum(year(dados$data_nascimento)<1930)
+```
+
+Por acreditar que esse valor baixo de data de nascimento é um erro, vou guardar o número da linha para posterior remoção da observação.
+
+```{r data_nasc_indice_remov}
+
+indices_remover = which(year(dados$data_nascimento)<1930)
+
+```
+
+## Data de admissão
+
+O procedimento para passar as datas de admissão para formato de data é o mesmo usado para as datas de nascimento (incluindo a correção das datas passadas para o século 21 quando deveriam estar no século 20):
+
+```{r data_admis_transforma}
+
+admis_1 = as.Date(dados$data_admissao, "%d/%m/%Y")
+admis_2 = as.Date(dados$data_admissao, "%m/%d/%y")
+
+dados$data_admissao = as.Date(admis_1)
+
+dados$data_admissao[is.na(dados$data_admissao)] = 
+  as.Date(admis_2[is.na(dados$data_admissao)])
+
+summary(dados$data_admissao)
+
+year(dados$data_admissao) = 
+  year(dados$data_admissao) - 
+  ifelse(year(dados$data_admissao)>=2068, 100, 0)
+
+summary(dados$data_admissao)
+
+ggplot() + aes(dados$data_admissao) +
+  geom_histogram(col="black", fill="white") +
+  ggtitle("histograma de datas de admissão") +
+  xlab("data") +
+  ylab("frequência")
+
+
+```
+
+Verifico abaixo se as datas de admissão estão consistentes com as datas de nascimento.
+
+```{r data_admis_compara_nasc}
+
+table(dados$area[(dados$data_nascimento+years(10))>dados$data_admissao])
+
+
+```
+
+Algumas datas de admissão são menos de 10 anos superiores à data de nascimento, o que certamente é um erro. Também salvarei os índices dessas observações para posterior remoção.
+
+```{r data_admis_indice_remov}
+
+remover_admissao = which((dados$data_nascimento + years(10)) >
+                            dados$data_admissao)
+
+indices_remover = c(indices_remover, remover_admissao)
+```
+
+## Salário mensal médio
+
+O salário mensal médio está como string. Transformo-o em número abaixo:
+
+```{r salario_transforma}
+
+dados$salario = gsub("[^0-9,]", "", dados$salario)
+dados$salario = gsub(",", ".", dados$salario)
+dados$salario = as.numeric(dados$salario)
+
+summary(dados$salario)
+
+```
+
+## Avaliação de desempenho
+
+Transformo abaixo a avaliação de desempenho em um fator ordenado.
+
+```{r aval_transforma}
+head(dados$aval)
+
+dados$aval = 
+  factor(dados$aval,
+         levels=c("INSATISFATORIO",
+                  "BOM", "OTIMO",
+                  "EXCELENTE"),
+         ordered=TRUE)
+
+head(dados$aval)
+```
+
+## Remover dados
+
+Agora removo os dados inconsistentes encontrados na análise das datas de nascimento e de admissão.
+
+```{r}
+dados_removidos = dados[indices_remover,]
+dados = dados[-indices_remover,]
+```
+
+# Exploração dos dados
+
+## Desligamento
+
+As tabelas mostram a quantidade absoluta e relativa de desligamentos da empresa.
+
+```{r explora_desligamento}
+table(dados$desligamento)
+table(dados$desligamento) / nrow(dados)
+```
+
+As classes são desbalanceadas - apenas cerca de 5% das pessoas na tabela se desligaram da empresa.
+
+## ex-trainee
+
+As tabelas abaixo mostram o número de ex-trainees entre as observações e como ex-trainees e não-ex-trainees se dividem entre pedir ou não desligamento.
+
+```{r explora_ex_trainee}
+table(dados$ex_trainee)
+
+table(dados$desligamento, dados$ex_trainee)
+t(apply(table(dados$desligamento, dados$ex_trainee), 1, 
+        function (x) x/table(dados$ex_trainee)))
+```
+
+O número de ex-trainees é muito pequeno (cerca de 1% do total de observações), o que dificulta a análise do impacto da variável.
+
+## Data de nascimento
+
+Comparo abaixo a distribuição da data de nascimento entre quem pediu ou não desligamento.
+
+```{r}
+summary(dados$data_nascimento[dados$desligamento==0])
+summary(dados$data_nascimento[dados$desligamento==1])
+
+ggplot(data = dados, aes(x = desligamento, y = data_nascimento)) + 
+  geom_boxplot() +
+  ggtitle("datas de nascimento por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("data")
+```
+
+Há uma leve tendência de pessoas mais novas a se desligarem mais, mas essa tendência pode ser um ruído nos dados disponíveis.
+
+## Sexo
+
+Abaixo vemos o número de homens e mulheres na empresa e como essa divisão se reflete nos desligamentos.
+
+```{r}
+table(dados$sexo)
+table(dados$desligamento, dados$sexo)
+t(apply(table(dados$desligamento, dados$sexo), 1, function (x) x/table(dados$sexo)))
+```
+
+Mulheres parecem mais propensas a se desligar, mas as classes são mais uma vez desbalanceadas, dificultanto sua utilização para previsão de resultados futuros.
+
+## Data de admissão
+
+Abaixo vemos como a distribuição de datas de admissão varia entre empregados desligados ou não.
+
+```{r}
+summary(dados$data_admissao[dados$desligamento==0])
+summary(dados$data_admissao[dados$desligamento==1])
+
+ggplot(data = dados, aes(x = desligamento, y = data_admissao)) + 
+  geom_boxplot() +
+  ggtitle("datas de admissão por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("data")
+```
+
+A relação entre desligamento e uma data de admissão mais recente parece um pouco mais clara do que a relação entre desligamento e data de nascimento.
+
+```{r}
+table(dados$desligamento, dados$data_admissao<median(dados$data_admissao))
+t(apply(table(dados$desligamento, 
+              dados$data_admissao<median(dados$data_admissao)),
+        1, 
+        function (x) x /
+          table(dados$data_admissao<median(dados$data_admissao))))
+```
+
+## Cargo
+
+Esta é uma variável categórica, mas o número de categorias é muito grande:
+
+```{r}
+length(unique(dados$cargo))
+
+```
+
+Além disso, a maior parte dos cargos possui poucas observações na tabela de dados, dificultando sua utilização para previsões:
+
+```{r}
+
+ggplot() + aes(as.vector(table(dados$cargo))) + 
+  geom_histogram(col="black", fill="white") +
+  ggtitle("quantidade de funcionários por cargo") +
+  xlab("funcionários por cargo") +
+  ylab("frequência")
+
+```
+
+Podemos ver se o número dos cargos quer dizer alguma coisa (ou seja, se a variável é de fato numérica e não categórica):
+
+```{r}
+dados$cargo_num = as.numeric(dados$cargo)
+ggplot(data=dados) + aes(x=desligamento, y=cargo_num) + geom_boxplot()
+
+dados$cargo[dados$area=='Executivo']
+dados$cargo[dados$area=='Estagiário']
+
+
+```
+
+Não parece ser o caso, até porque funcionários em áreas distintas - executivos e estagiários - podem ter cargos com numeração semelhante.
+
+Talvez a quantidade de pessoas com o mesmo cargo influencie o desligamento?
+
+```{r}
+
+# número de "colegas" por cargo
+tabela_cargos = table(dados$cargo)
+dados$colegas_cargo = tabela_cargos[dados$cargo]
+ggplot(dados) + aes(x=desligamento, y=colegas_cargo) + geom_boxplot()
+
+sum(dados$colegas_cargo>40)
+
+sum(dados$desligamento[dados$colegas_cargo>40]==1) /
+  sum(dados$colegas_cargo>40)
+```
+
+Parece haver uma tendência maior a se desligar em cargos mais "populosos". Vou manter essa variável para análises posteriores.
+
+## Área
+
+As tabelas abaixo mostram a variação da taxa de desligamento por áreas.
+
+```{r}
+table(dados$desligamento, dados$area)
+t(apply(table(dados$desligamento, dados$area), 
+              1, function (x) x/table(dados$area)))
+```
+
+Algumas áreas mostram clara tendência para mais ou menos desligamento em relação à média da empresa. Entre aprendizes, por exemplo, o desligamento é de cerca de 25%, bem maior do que a média de 5% da empresa como um todo. Em alguns casos, porém, o número de empregados na área é muito pequeno para que se possa tirar alguma conclusão definitiva.
+
+## Salário mensal médio
+
+Vamos ver como a distribuição de salários é afetada pelo desligamento (limito o gráfico a um salário máximo de R$ 50 mil para facilitar a visualização, e porque são poucos os funcionários com salário acima desse limite):
+
+```{r}
+summary(dados$salario[dados$desligamento=='0'])
+summary(dados$salario[dados$desligamento=='1'])
+
+ggplot(dados) + aes(x=desligamento, y=salario) +
+  geom_boxplot() +
+  ggtitle("salário por chave de desligamento") +
+  xlab("desligamento") +
+  ylab("salário mensal médio (R$)") +
+  scale_y_continuous(limits=c(0, 50000))
+
+
+```
+
+A distribuição do salário parece não mudar muito. Mas há diferenças significativas de salário conforme a área de atuação na empresa:
+
+```{r}
+
+ggplot(data = dados, aes(x = area, y = salario)) + 
+  geom_boxplot() +
+  ggtitle("salário por área") +
+  xlab("área") +
+  ylab("R$")
+
+
+```
+
+Podemos ver se a distribuição de salário muda quando essas duas variáveis (desligamento e área) são consideradas:
+
+```{r}
+
+ggplot(data = dados, aes(x = area, y = salario, fill=desligamento)) + 
+  geom_boxplot() + scale_y_continuous(limits=c(0, 50000)) +
+  ggtitle("salário por área e chave de desligamento") +
+  xlab("[área") +
+  ylab("R$")
+
+ggplot(data = dados, aes(x = aval, y = salario)) + 
+  geom_boxplot() + scale_y_continuous(limits=c(0, 50000)) +
+  ggtitle("salário por avaliação") +
+  xlab("avaliação") +
+  ylab("R$")
+
+ggplot(data = dados, aes(x = aval, y = salario, fill = desligamento)) + 
+  geom_boxplot() + scale_y_continuous(limits=c(0, 10000)) +
+  ggtitle("salário por avaliação e por área") +
+  xlab("avaliação") +
+  ylab("R$")
+
+```
+
+## Posição crítica
+
+As tabelas abaixo mostram a relação entre desligamentos e ocupar ou não uma posição crítica na empresa:
+
+```{r}
+table(dados$pos_critica)
+table(dados$desligamento, dados$pos_critica)
+t(apply(table(dados$desligamento, dados$pos_critica), 
+              1, function (x) x / table(dados$pos_critica)))
+
+```
+
+Parece haver uma tendência maior para desligamento entre os que ocupam posições críticas.
+
+## Gestor
+
+Como no caso da variável cargo, trata-se de uma variável categórica com muitas categorias:
+
+```{r}
+length(unique(dados$gestor))
+```
+
+E aqu também o número de observações por categoria é pequeno, dificultando o uso da variável para previsões:
+
+```{r}
+
+ggplot() + aes(as.vector(tabela_gestores)) + 
+  geom_histogram(col="black", fill="white",
+                 bins=length(unique(table(dados$gestor)))) +
+  ggtitle("quantidade de funcionários por gestor") +
+  xlab("funcionários por gestor") +
+  ylab("frequência")
+
+
+```
+
+Novamente, os valores em si não parecem dizer muita coisa - ou seja, a variável é de fato categórica e não numérica.
+
+```{r}
+dados$gestor_num = as.numeric(dados$gestor)
+ggplot(data=dados) + aes(x=desligamento, y=gestor_num) + geom_boxplot()
+
+dados$gestor[dados$area=='Executivo']
+dados$gestor[dados$area=='Estagiário']
+
+
+```
+
+Aqui também podemos verificar se o número de observações na mesma categoria afeta o desligamento.
+
+```{r}
+tabela_gestores = table(dados$gestor)
+dados$colegas_gestor = tabela_gestores[dados$gestor]
+ggplot(dados) + aes(x=desligamento, y=colegas_gestor) + geom_boxplot()
+
+```
+
+Parece haver uma tendência a mais desligamento quando menos observações estão na mesma categoria.
+
+## Avaliação
+
+As tabelas abaixo mostram a relação entre desligamento e avaliação do funcionário.
+
+```{r avaliacao}
+
+table(dados$desligamento, dados$aval)
+table(dados$desligamento, dados$aval) /
+  matrix(rep(table(dados$aval), 2), nrow=2, byrow=TRUE)
+```
+
+
+## Distância do trabalho
+
+Abaixo vemos como a distância do trabalho se relaciona com o desligamento.
+
+```{r}
+summary(dados$dist)
+summary(dados$dist[dados$desligamento=='0'])
+summary(dados$dist[dados$desligamento=='1'])
+
+ggplot(data = dados, aes(x = desligamento, y = dist)) + 
+  geom_boxplot() +
+  ggtitle("distância do trabalho por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("km")
+
+```
+
+Não parece haver diferença na distribuição da distância do trabalho entre categorias de desligamento.
+
+## Tempo para chegar no trabalho
+
+Como acima, a distribuição do tempo para chegar ao trabalho parece idêntica entre funcionários que se desligaram ou não.
+
+```{r}
+summary(dados$tempo)
+summary(dados$tempo[dados$desligamento=='0'])
+summary(dados$tempo[dados$desligamento=='1'])
+
+ggplot(data = dados, aes(x = desligamento, 
+                         y = tempo)) + 
+  geom_boxplot() +
+  ggtitle("tempo para chegar ao trabalho por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("minutos")
+
+```
+
+Além disso, o tempo para chegar ao trabalho está fortemente correlacionado com a distância:
+
+```{r}
+qplot(dados$dist, dados$tempo) +   
+  ggtitle("distância e tempo para chegar ao trabalho") +
+  xlab("km") +
+  ylab("minutos")
+
+```
+
+O desempenho de alguns algoritmos pode ser prejudicado pela presença de variáveis com forte correlação. Mesmo quando isso não ocorre, duas variáveis tão fortemente correlacionadas são redundantes, porque a informação obtida é basicamente a mesma para as duas. Assim, vou remover uma dessas variáveis da tabela de variáveis para análise.
+
+## Turnover mercado
+
+Abaixo analisamos como a distribuição do *turnover* de mercado muda conforme a categoria de desligamento.
+
+```{r}
+summary(dados$turnover[dados$desligamento=='0'])
+summary(dados$turnover[dados$desligamento=='1'])
+
+ggplot(data = dados, aes(x = desligamento, y = turnover)) + 
+  geom_boxplot() +
+  ggtitle("turnover de mercado por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("%")
+
+```
+
+Como esperado, o desligamento parece associado a um *turnover* de mercado maior.
+
+## Correlação entre variáveis
+
+Calculo abaixo a correlação entre todas as variáveis presentes na tabela de dados.
+
+```{r correl}
+
+matriz_dados = model.matrix(dados)
+
+```
+
+
+# Análise
+
+## Mudar fatores
+
+```{r muda_fatores}
+levels(dados$desligamento) = c("nao", "sim")
+```
+
+## Remover variáveis 
+
+```{r remove_variaveis}
+
+var_remover = c("cargo", "cargo_num", "gestor", "gestor_num",
+                "dist")
+
+dados_limpos = dados[,-which(names(dados) %in% var_remover)]
+```
+
+## Criar dados de treinamento, validação e teste
+
+```{r treino_teste}
+
+indices_treino = createDataPartition(dados$desligamento, p = 0.6,
+                                     list=FALSE)
+dados_treino = dados_limpos[indices_treino,]
+dados_teste = dados_limpos[-as.vector(indices_treino),]
+
+indices_valida = createDataPartition(dados_teste$desligamento, p=0.5,
+                                     list=FALSE)
+dados_valida = dados_teste[indices_valida,]
+dados_teste = dados_teste[-as.vector(indices_valida),]
+
+```
+
+## Seleção de variáveis usando Boruta
+
+```{r boruta}
+
+boruta_result = Boruta(desligamento~., dados_treino,
+                       doTrace=1)
+
+var_manter = c(1, which(boruta_result$finalDecision!="Rejected")+1)
+
+dados_treino_boruta = dados_treino[,var_manter]
+dados_valida_boruta = dados_valida[,var_manter]
+dados_teste_boruta = dados_teste[,var_manter]
+
+```
+
+## Definição de folds para validação cruzada
+
+```{r folds_cv}
+
+folds = createFolds(1:nrow(dados_treino), k=10, returnTrain = TRUE)
+
+```
+
+## criar matriz para treinamento e vetor de rótulos
+
+```{r matriz_treino}
+dados_treino_X = model.matrix(desligamento~.,
+                              dados_treino)
+dados_treino_y = dados_treino[,1]
+```
+
+## Árvore de decisão com boosting
+
+### Treinamento
+
+```{r xgboost}
+
+xgb_grid = expand.grid(
+  eta = c(0.01, 0.03, 0.1),
+  max_depth = c(2, 4, 6),
+  gamma = c(0.1, 0.3, 1),
+  colsample_bytree = c(0.75, 1),
+  min_child_weight = c(1, 3, 10),
+  nrounds=c(300, 1000, 3000)
+)
+
+indices_params = sample(1:nrow(xgb_grid), round(nrow(xgb_grid)*0.3))
+
+xgb_grid_random = xgb_grid[indices_params,]
+
+xgb_control = trainControl(
+  method="cv",
+  number=10,
+  index=folds,
+  verboseIter=TRUE,
+  classProbs = TRUE,
+  summaryFunction = twoClassSummary
+)
+
+inicio = proc.time()
+
+xgb_treino = train(
+  x=dados_treino_X,
+  y=dados_treino_y,
+  trControl=xgb_control,
+  tuneGrid=xgb_grid_random,
+  method="xgbTree",
+  metric="ROC"
+)
+
+tempo = proc.time() - inicio
+
+print(tempo)
+
+xgb_modelo = xgb_treino$finalModel
+```
+
+### Definição de cutoff
+
+```{r}
+
+dados_valida_X = model.matrix(desligamento~., dados_valida)
+dados_valida_y = dados_valida[,1]
+
+xgb_valida_probs = 1 - predict(xgb_modelo, dados_valida_X)
+
+xgb_valida_pred = prediction(xgb_valida_probs, dados_valida_y)
+
+performance(xgb_valida_pred, "auc")
+
+xgb_valida_perf_roc = performance(xgb_valida_pred, "tpr", "fpr")
+plot(xgb_valida_perf_roc)
+
+
+```
+
+
+
+```{r best_params}
+
+#   nrounds   max_depth   eta   gamma colsample_bytree min_child_weight
+#    1000         4       0.1     3        1              0.3
+
+```
+
+## Regressão logística com validação cruzada
+
+```{r reglog_cv}
+
+# reglog_treino_X = dados_treino_boruta[,-1]
+
+# reglog_treino_X = dados_treino_boruta[,-1]
+# reglog_treino_y = dados_treino_boruta[,1]
+#  
+# reglog_grid = expand.grid(
+#   lambda=c(0.0001, 0.0003, 0.001, 0.003, 0.01, 0.03, 1, 3, 10),
+#   cp="bic"
+# )
+# 
+# reglog_control = trainControl(
+#   method="cv",
+#   number=10,
+#   verboseIter=TRUE,
+#   returnData=TRUE,
+#   classProbs=TRUE,
+#   summaryFunction=twoClassSummary,
+#   allowParallel=TRUE
+# )
+# 
+# reglog_result = train(
+#   x=reglog_treino_X,
+#   y=reglog_treino_y,
+#   trControl=reglog_control,
+#   tuneGrid=reglog_grid,
+#   method="plr"  
+# )
+# 
+# reglog_X_treino = model.matrix(desligamento~., reglog_treino)
+# reglog_y_treino = reglog_treino$desligamento
+# 
+# reglog_X_teste = model.matrix(desligamento~., reglog_teste)
+# relog_y_test = reglog_teste$desligamento
+# 
+# reglog_cv = cv.glmnet(X, y, family='binomial', alpha=1)
+
+```

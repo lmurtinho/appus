@@ -1,0 +1,193 @@
+---
+title: "Appus - Questão 2"
+author: "Lucas Murtinho"
+date: "19 de abril de 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+set.seed(1)
+rm(list=ls())
+```
+
+
+É sabido que o modelo de regressão linear possui determinadas suposições estatísticas: homocedasticidade, autocorrelação, endogeneidade, multicolinearidade e normalidade. Assim, o objetivo desta tarefa é verificar o impacto da violação de tais suposições tanto nos parâmetros quanto na variável respota/target como descrito abaixo:
+
+# Homocedasticidade, autocorrelação e endogeneidade
+
+Simule 10.000 modelos de regressão linear simples ($Y = \beta_0 + \beta_1*X + \epsilon$), verifique em quantos deles os intervalos de confiança não contém os verdadeiros valores dos parâmetros (definidos como input da simulação). Além disso, teste se a quantidade de intervalos de confiança que não contém os verdadeiros valores dos parâmetros para cada modelo simulado (considere 5% de nível de significância) é significativa.
+
+```{r}
+
+iter = 10000
+n_obs = 1000
+
+b0_fora = rep(0, iter)
+b1_fora = rep(0, iter)
+
+
+for (i in 1:iter) {
+  
+  b0 = sample(-100:100, 1)
+  b1 = sample(-100:100, 1)
+  x_media = sample(-100:100, 1)
+  x_desvpad = sample(1:100, 1)
+  erro_desv_pad = 100
+  
+  x = rnorm(n_obs, x_media, x_desvpad)
+  erro = rnorm(n_obs, 0, erro_desv_pad)
+
+  y = b0 + b1*x + erro
+
+  modelo = lm(y~x)
+  
+  conf_ints = confint(modelo)
+  
+  if (b0 < conf_ints[1,1] | b0 > conf_ints[1,2]) {
+    b0_fora[i] = 1
+  }
+
+  if (b1 < conf_ints[2,1] | b1 > conf_ints[2,2]) {
+    b1_fora[i] = 1
+  }
+}
+
+b0_fora_total = sum(b0_fora)
+b1_fora_total = sum(b1_fora)
+
+b0_teste = prop.test(table(b0_fora))
+b1_teste = prop.test(table(b1_fora))
+
+n_sign = 0.05
+b0_fora_percent = b0_fora_total/iter
+b1_fora_percent = b1_fora_total/iter
+
+sign_b0 = ifelse(b0_teste$p.value>n_sign, "", "não")
+sign_b1 = ifelse(b1_teste$p.value>n_sign, "", "não")
+
+```
+
+Em `r sprintf("%.0f", b0_fora_total)` das `r sprintf("%.0f", iter)` simulações realizadas (`r sprintf("%.2f%%", 100*b0_fora_percent)` das simulações), o intervalo de confiança para o intercepto ($\beta_0$) não inclui o verdadeiro valor do parâmetro. A quantidade  `r sign_b0` é significativa considerando o nível de significância de `r sprintf("%.2f%%", 100*n_sign)`.
+
+Em `r sprintf("%.0f", b1_fora_total)` das `r sprintf("%.0f", iter)` simulações realizadas (`r sprintf("%.2f%%", 100*b1_fora_percent)` das simulações), o intervalo de confiança para o intercepto ($\beta_1$) não inclui o verdadeiro valor do parâmetro. A quantidade  `r sign_b1` é significativa considerando o nível de significância de `r sprintf("%.2f%%", 100*n_sign)`.
+
+# Multicolinearidade
+
+Simule duas covariáveis altamente correlacionadas, estime um modelo de regressão linear múltipla com tais variáveis ($Y = \beta_0 + \beta_1*X_1 + \beta_2*X_2 + \epsilon$). Compare e discuta os resultados obtidos na regressão anterior com os obtidos a partir de duas regressões simples ($Y = \beta_0 + \beta_1*X_1 + \epsilon$ e $Y = \beta_0 + \beta_2*X_2 + \epsilon$).
+
+```{r multicol}
+
+b0 = sample(-10:10, 1)
+b1 = sample(-10:10, 1)
+b2 = sample(-10:10, 1)
+
+x1_media = sample(-10:10, 1)
+x1_desvpad = sample(1:10, 1)
+x1 = rnorm(n_obs, x1_media, x1_desvpad)
+
+x2_erro_desvpad = 1
+x2 = x1 + rnorm(n_obs, 0, x2_erro_desvpad)
+
+erro_desvpad = 100
+erro = rnorm(1000, 0, erro_desvpad)
+
+y = b0 + b1*x1 + b2*x2 + erro
+modelo_2_var = lm(y~x1+x2)
+
+y = b0 + b1*x1 + erro
+modelo_x1 = lm(y~x1)
+
+y = b0 + b2*x2 + erro
+modelo_x2 = lm(y~x2)
+```
+
+Coeficientes do modelo:
+
+```{r}
+b0
+b1
+b2
+```
+
+Intervalos de confiança para coeficientes do modelo com duas variáveis fortemente correlacionadas:
+```{r}
+confint(modelo_2_var)
+```
+
+Intervalo de confiança para coeficiente do modelo apenas com a variável $X_1$:
+```{r}
+confint(modelo_x1)
+```
+
+Intervalo de confiança para coeficiente do modelo apenas com a variável $X_2$:
+```{r}
+confint(modelo_x2)
+```
+
+A presença de variáveis colineares aumenta os desvios-padrão da estimativa dos coeficientes, pois é difícil determinar o efeito de uma variável quando outra quase sempre a acompanha. Com isso, o intervalo de confiança da estimativa das variáveis aumenta, reduzindo o grau de confiança do modelo, que pode ainda rejeitar como insignificantes variáveis que têm impacto sobre a variável dependente. É o que ocorre no caso acima:
+
+```{r}
+summary(modelo_2_var)
+```
+
+O modelo considera o coeficiente da variável $X_1$ estatisticamente igual a zero (com um grau de confiança de 5%), quando na verdade esse coeficiente tem valor `r b1`.
+
+# Normalidade
+
+Simule 10.000 modelos de regressão linear simples ($Y = \beta_0 + \beta_1*X + \epsilon$) considerando uma amostra de tamanho pequeno e faças as mesmas análises do primeiro item desta questão.
+
+```{r}
+n_obs_2 = 30
+
+b0_fora = rep(0, iter)
+b1_fora = rep(0, iter)
+
+
+for (i in 1:iter) {
+  
+  b0 = sample(-100:100, 1)
+  b1 = sample(-100:100, 1)
+  x_media = sample(-100:100, 1)
+  x_desvpad = sample(1:100, 1)
+  erro_desv_pad = 100
+  
+  x = rnorm(n_obs_2, x_media, x_desvpad)
+  erro = rnorm(n_obs_2, 0, erro_desv_pad)
+
+  y = b0 + b1*x + erro
+
+  modelo = lm(y~x)
+  
+  conf_ints = confint(modelo)
+  
+  if (b0 < conf_ints[1,1] | b0 > conf_ints[1,2]) {
+    b0_fora[i] = 1
+  }
+
+  if (b1 < conf_ints[2,1] | b1 > conf_ints[2,2]) {
+    b1_fora[i] = 1
+  }
+}
+
+b0_fora_total = sum(b0_fora)
+b1_fora_total = sum(b1_fora)
+
+b0_teste = prop.test(table(b0_fora))
+b1_teste = prop.test(table(b1_fora))
+
+n_sign = 0.05
+b0_fora_percent = b0_fora_total/iter
+b1_fora_percent = b1_fora_total/iter
+
+sign_b0 = ifelse(b0_teste$p.value>n_sign, "", "não")
+sign_b1 = ifelse(b1_teste$p.value>n_sign, "", "não")
+
+```
+
+Em `r sprintf("%.0f", b0_fora_total)` das `r sprintf("%.0f", iter)` simulações realizadas (`r sprintf("%.2f%%", 100*b0_fora_percent)` das simulações), o intervalo de confiança para o intercepto ($\beta_0$) não inclui o verdadeiro valor do parâmetro. A quantidade  `r sign_b0` é significativa considerando o nível de significância de `r sprintf("%.2f%%", 100*n_sign)`.
+
+Em `r sprintf("%.0f", b1_fora_total)` das `r sprintf("%.0f", iter)` simulações realizadas (`r sprintf("%.2f%%", 100*b1_fora_percent)` das simulações), o intervalo de confiança para o intercepto ($\beta_1$) não inclui o verdadeiro valor do parâmetro. A quantidade  `r sign_b1` é significativa considerando o nível de significância de `r sprintf("%.2f%%", 100*n_sign)`.

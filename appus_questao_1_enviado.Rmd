@@ -1,0 +1,700 @@
+---
+title: "Appus - Questão 1"
+author: "Lucas Murtinho"
+date: "April 19, 2016"
+output:
+  html_document:
+    toc: yes
+---
+
+# Preparação
+
+## Semente aleatória
+
+Definição de semente aleatória para reproducibilidade dos resultados.
+
+```{r semente}
+set.seed(1)
+```
+
+## Pasta
+
+Pasta com os dados.
+
+```{r pasta}
+rm(list=ls())
+pasta = 'C:/Users/zsj7/Desktop/appus/'
+```
+
+## Carregar módulos
+
+Módulos utilizados na análise.
+
+```{r modulos, warning=FALSE}
+library(caret) # função para repartir dados
+library(ggplot2) # gráficos
+library(lubridate) # datas
+library(ROCR) # análise de performance
+library(xgboost) # árvore de decisão com extreme gradient boosting
+```
+
+## Opções de gráfico
+
+Layout dos gráficos.
+
+```{r tema_graficos}
+theme_set(theme_bw())
+```
+
+## Ler dados
+
+Leitura dos dados, com as categorias definidas no documento sobre os dados e colunas renomeadas.
+
+```{r ler_dados}
+dados = read.csv2(paste0(pasta, "questao1.csv"),
+                  colClasses=c(rep("factor", 2), "character", "factor",
+                               "character", rep("factor", 2), "character",
+                               rep("factor", 2), "factor", rep("numeric", 3)),
+                  fileEncoding = 'ISO-8859-1')
+
+names(dados) = c("desligamento",
+                 "ex_trainee",
+                 "data_nascimento",
+                 "sexo",
+                 "data_admissao",
+                 "cargo",
+                 "area",
+                 "salario",
+                 "pos_critica",
+                 "gestor",
+                 "aval",
+                 "dist",
+                 "tempo",
+                 "turnover")
+
+
+```
+
+# Limpeza de dados
+
+## Primeira vista
+
+```{r estrutura_dados}
+str(dados)
+```
+
+Remoção da coluna extra no fim da tabela de dados:
+
+```{r remover_dados}
+dados = dados[,-ncol(dados)]
+```
+
+
+## Data de nascimento
+
+As datas de nascimento precisam ser transformadas de string para formatos de data, mas há dois formatos diferentes. Vou criar dois vetores e transformar os dados duas vezes. 
+
+```{r data_nasc_transforma}
+nasc_1 = as.Date(dados$data_nascimento, "%d/%m/%Y")
+nasc_2 = as.Date(dados$data_nascimento, "%m/%d/%y")
+
+dados$data_nascimento = as.Date(nasc_1)
+
+dados$data_nascimento[is.na(dados$data_nascimento)] = 
+  as.Date(nasc_2[is.na(dados$data_nascimento)])
+
+```
+
+Resultado da transformação:
+
+```{r data_nasc_graf_1}
+
+summary(dados$data_nascimento)
+
+ggplot() + aes(dados$data_nascimento) +
+  geom_histogram(col="black", fill="white") +
+  ggtitle("histograma de datas de nascimento") +
+  xlab("data") +
+  ylab("frequência")
+
+
+```
+
+Correção de dados incorretos (anos com 2 dígitos de 68 para cima são considerados como do século 21 pela função `as.Date`, mas no caso são do século 20):
+
+```{r data_nasc_corrige_anos}
+
+year(dados$data_nascimento) = 
+  year(dados$data_nascimento) - 
+  ifelse(year(dados$data_nascimento)>2000,
+         100, 0)
+
+summary(dados$data_nascimento)
+ggplot() + aes(dados$data_nascimento) +
+  geom_histogram(col="black", fill="white") +
+  ggtitle("histograma de datas de nascimento") +
+  xlab("data") +
+  ylab("frequência")
+
+
+```
+
+O valor mínimo continua baixo. Quantos valores abaixo de 1930?
+
+```{r data_nasc_valores_baixos}
+sum(year(dados$data_nascimento)<1930)
+```
+
+Salvar o índice do valor mínimo para posterior remoção (valor incorreto):
+
+```{r data_nasc_indice_remov}
+
+indices_remover = which(year(dados$data_nascimento)<1930)
+
+```
+
+## Data de admissão
+
+Procedimento semelhante ao usado para datas de nascimento.
+
+```{r data_admis_transforma}
+
+admis_1 = as.Date(dados$data_admissao, "%d/%m/%Y")
+admis_2 = as.Date(dados$data_admissao, "%m/%d/%y")
+
+dados$data_admissao = as.Date(admis_1)
+
+dados$data_admissao[is.na(dados$data_admissao)] = 
+  as.Date(admis_2[is.na(dados$data_admissao)])
+
+summary(dados$data_admissao)
+
+year(dados$data_admissao) = 
+  year(dados$data_admissao) - 
+  ifelse(year(dados$data_admissao)>=2068, 100, 0)
+
+summary(dados$data_admissao)
+
+ggplot() + aes(dados$data_admissao) +
+  geom_histogram(col="black", fill="white") +
+  ggtitle("histograma de datas de admissão") +
+  xlab("data") +
+  ylab("frequência")
+
+
+```
+
+Verificação de consistência entre datas de nascimento e de admissão:
+
+```{r data_admis_compara_nasc}
+
+table(dados$area[(dados$data_nascimento+years(10))>dados$data_admissao])
+
+
+```
+
+Algumas datas de admissão são menos de 10 anos superiores à data de nascimento, o que certamente é um erro. Salvando índices para posterior remoção:
+
+```{r data_admis_indice_remov}
+
+remover_admissao = which((dados$data_nascimento + years(10)) >
+                            dados$data_admissao)
+
+indices_remover = c(indices_remover, remover_admissao)
+```
+
+## Salário mensal médio
+
+Transformação de string para números:
+
+```{r salario_transforma}
+
+dados$salario = gsub("[^0-9,]", "", dados$salario)
+dados$salario = gsub(",", ".", dados$salario)
+dados$salario = as.numeric(dados$salario)
+
+summary(dados$salario)
+
+```
+
+## Avaliação de desempenho
+
+Transformação em fator ordenado:
+
+```{r aval_transforma}
+head(dados$aval)
+
+dados$aval = 
+  factor(dados$aval,
+         levels=c("INSATISFATORIO",
+                  "BOM", "OTIMO",
+                  "EXCELENTE"),
+         ordered=TRUE)
+
+head(dados$aval)
+```
+
+## Remover dados
+
+Remoção dos dados com datas de nascimento/admissão suspeitas.
+
+```{r}
+dados_removidos = dados[indices_remover,]
+dados = dados[-indices_remover,]
+```
+
+# Exploração dos dados
+
+## Desligamento
+
+Quantidade absoluta e relativa de desligamentos:
+
+```{r explora_desligamento}
+table(dados$desligamento)
+table(dados$desligamento) / nrow(dados)
+```
+
+As classes são desbalanceadas - apenas cerca de `r sprintf("%.0f%%", 100*sum(dados$desligamento==1)/nrow(dados))` das pessoas na tabela se desligaram da empresa.
+
+## ex-trainee
+
+Quantidade de ex-trainees e relação com classe de desligamento:
+
+```{r explora_ex_trainee}
+table(dados$ex_trainee)
+
+table(dados$desligamento, dados$ex_trainee)
+t(apply(table(dados$desligamento, dados$ex_trainee), 1, 
+        function (x) x/table(dados$ex_trainee)))
+```
+
+Temos apenas `r table(dados$ex_trainee[2])` ex-trainees, o que dificulta a análise do impacto da variável.
+
+## Data de nascimento
+
+Distribuição da variável por classe de desligamento:
+
+```{r}
+summary(dados$data_nascimento[dados$desligamento==0])
+summary(dados$data_nascimento[dados$desligamento==1])
+
+ggplot(data = dados, aes(x = desligamento, y = data_nascimento)) + 
+  geom_boxplot() +
+  ggtitle("datas de nascimento por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("data")
+```
+
+Há uma leve tendência de pessoas mais novas a se desligarem mais, mas essa tendência pode ser um ruído nos dados disponíveis.
+
+## Sexo
+
+Quantidade de homens e mulheres e relação com classe de desligamento:
+
+```{r}
+table(dados$sexo)
+table(dados$desligamento, dados$sexo)
+t(apply(table(dados$desligamento, dados$sexo), 1, function (x) x/table(dados$sexo)))
+```
+
+Mulheres parecem mais propensas a se desligar, mas as classes são mais uma vez desbalanceadas, dificultanto sua utilização para previsão de resultados futuros.
+
+## Data de admissão
+
+Distribuição da variável por classe de desligamento:
+
+```{r}
+summary(dados$data_admissao[dados$desligamento==0])
+summary(dados$data_admissao[dados$desligamento==1])
+
+ggplot(data = dados, aes(x = desligamento, y = data_admissao)) + 
+  geom_boxplot() +
+  ggtitle("datas de admissão por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("data")
+```
+
+A relação entre desligamento e uma data de admissão mais recente parece um pouco mais clara do que a relação entre desligamento e data de nascimento.
+
+```{r}
+table(dados$desligamento, dados$data_admissao<median(dados$data_admissao))
+t(apply(table(dados$desligamento, 
+              dados$data_admissao<median(dados$data_admissao)),
+        1, 
+        function (x) x /
+          table(dados$data_admissao<median(dados$data_admissao))))
+```
+
+## Cargo
+
+Há `r length(unique(dados$cargo))` categorias possíveis nessa variável, e a maior parte das categorias possui poucas observações: 
+
+```{r}
+
+ggplot() + aes(as.vector(table(dados$cargo))) + 
+  geom_histogram(col="black", fill="white") +
+  ggtitle("quantidade de funcionários por cargo") +
+  xlab("funcionários por cargo") +
+  ylab("frequência")
+
+```
+
+Isso dificulta a análise - precisamos de `r length(unique(dados$cargo)) -1` dummies para modelar essa variável, o que é muito dada a quantidade de observações disponíveis. Podemos ver se o número dos cargos quer dizer alguma coisa (ou seja, se a variável é de fato numérica e não categórica):
+
+```{r}
+dados$cargo_num = as.numeric(dados$cargo)
+ggplot(data=dados) + aes(x=desligamento, y=cargo_num) + geom_boxplot()
+
+dados$cargo[dados$area=='Executivo']
+dados$cargo[dados$area=='Estagiário']
+```
+
+Não parece ser o caso, até porque funcionários em áreas distintas - executivos e estagiários - podem ter cargos com numeração semelhante.
+
+Também podemos verificar se a distribuiução da quantidade de pessoas com o mesmo cargo é a mesma para quem se desligou ou não:
+
+```{r}
+
+# número de "colegas" por cargo
+tabela_cargos = table(dados$cargo)
+dados$colegas_cargo = tabela_cargos[dados$cargo]
+ggplot(dados) + aes(x=desligamento, y=colegas_cargo) + geom_boxplot()
+
+sum(dados$colegas_cargo>40)
+
+sum(dados$desligamento[dados$colegas_cargo>40]==1) /
+  sum(dados$colegas_cargo>40)
+```
+
+Parece haver uma tendência maior a se desligar em cargos mais "populosos". Vou manter essa variável para análises posteriores.
+
+## Área
+
+As tabelas abaixo mostram a variação da taxa de desligamento por áreas.
+
+```{r}
+table(dados$desligamento, dados$area)
+t(apply(table(dados$desligamento, dados$area), 
+              1, function (x) x/table(dados$area)))
+```
+
+Algumas áreas mostram clara tendência para mais ou menos desligamento em relação à média da empresa. Entre aprendizes, por exemplo, o desligamento é de cerca de `r sprintf("%.0f%%", sum(dados$desligamento[dados$area=="Aprendiz"]==1)/sum(dados$area=="Aprendiz"))`, bem maior do que a taxa de `r sprintf("%.0f%%", sum(dados$desligamento==1)/nrow(dados))` da empresa como um todo. Em alguns casos, porém, o número de empregados na área é muito pequeno para que se possa tirar alguma conclusão sobre a variável.
+
+## Salário mensal médio
+
+Distribuição da variável por classe de desligamento (gráfico limitado a máximo de R$ 50 mil para facilitar a visualização):
+
+```{r}
+summary(dados$salario[dados$desligamento=='0'])
+summary(dados$salario[dados$desligamento=='1'])
+
+ggplot(dados) + aes(x=desligamento, y=salario) +
+  geom_boxplot() +
+  ggtitle("salário por chave de desligamento") +
+  xlab("desligamento") +
+  ylab("salário mensal médio (R$)") +
+  scale_y_continuous(limits=c(0, 50000))
+```
+
+A distribuição do salário parece não mudar muito. Mas há diferenças significativas de salário por área de atuação:
+
+```{r}
+ggplot(data = dados, aes(x = area, y = salario)) + 
+  geom_boxplot() +
+  ggtitle("salário por área") +
+  xlab("área") +
+  ylab("R$")
+```
+
+Podemos ver se a distribuição de salário muda quando essas duas variáveis (desligamento e área) são consideradas:
+
+```{r}
+ggplot(data = dados, aes(x = area, y = salario, fill=desligamento)) + 
+  geom_boxplot() + scale_y_continuous(limits=c(0, 50000)) +
+  ggtitle("salário por área e chave de desligamento") +
+  xlab("[área") +
+  ylab("R$")
+```
+
+## Posição crítica
+
+As tabelas abaixo mostram a relação entre desligamentos e ocupar ou não uma posição crítica na empresa:
+
+```{r}
+table(dados$pos_critica)
+table(dados$desligamento, dados$pos_critica)
+t(apply(table(dados$desligamento, dados$pos_critica), 
+              1, function (x) x / table(dados$pos_critica)))
+
+```
+
+Parece haver uma tendência maior para desligamento entre os que ocupam posições críticas.
+
+## Gestor
+
+Como no caso da variável cargo, trata-se de uma variável categórica com muitas categorias - `r length(unique(dados$gestor))`. E aqui também o número de observações por categoria é pequeno, dificultando o uso da variável para previsões:
+
+```{r}
+tabela_gestores = table(dados$gestor)
+
+ggplot() + aes(as.vector(tabela_gestores)) + 
+  geom_histogram(col="black", fill="white",
+                 bins=length(unique(table(dados$gestor)))) +
+  ggtitle("quantidade de funcionários por gestor") +
+  xlab("funcionários por gestor") +
+  ylab("frequência")
+```
+
+Novamente, os valores em si não parecem dizer muita coisa - ou seja, a variável é de fato categórica e não numérica.
+
+```{r}
+dados$gestor_num = as.numeric(dados$gestor)
+ggplot(data=dados) + aes(x=desligamento, y=gestor_num) + geom_boxplot()
+
+dados$gestor[dados$area=='Executivo']
+dados$gestor[dados$area=='Estagiário']
+```
+
+Aqui também podemos verificar se o número de observações na mesma categoria afeta o desligamento.
+
+```{r}
+dados$colegas_gestor = tabela_gestores[dados$gestor]
+ggplot(dados) + aes(x=desligamento, y=colegas_gestor) + geom_boxplot()
+
+```
+
+Parece haver uma tendência a mais desligamento quando menos observações estão na mesma categoria.
+
+## Avaliação
+
+As tabelas abaixo mostram a relação entre desligamento e avaliação do funcionário.
+
+```{r avaliacao}
+
+table(dados$desligamento, dados$aval)
+table(dados$desligamento, dados$aval) /
+  matrix(rep(table(dados$aval), 2), nrow=2, byrow=TRUE)
+```
+
+COMPLETAR
+
+## Distância do trabalho
+
+Distribuição da variável por classe de desligamento:
+
+```{r}
+summary(dados$dist[dados$desligamento=='0'])
+summary(dados$dist[dados$desligamento=='1'])
+
+ggplot(data = dados, aes(x = desligamento, y = dist)) + 
+  geom_boxplot() +
+  ggtitle("distância do trabalho por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("km")
+
+```
+
+Não parece haver diferença na distribuição da distância do trabalho entre categorias de desligamento.
+
+## Tempo para chegar no trabalho
+
+Distribuição da variável por classe de desligamento:
+
+```{r}
+summary(dados$tempo[dados$desligamento=='0'])
+summary(dados$tempo[dados$desligamento=='1'])
+
+ggplot(data = dados, aes(x = desligamento, 
+                         y = tempo)) + 
+  geom_boxplot() +
+  ggtitle("tempo para chegar ao trabalho por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("minutos")
+
+```
+
+Correlação com distância:
+
+```{r}
+qplot(dados$dist, dados$tempo) +   
+  ggtitle("distância e tempo para chegar ao trabalho") +
+  xlab("km") +
+  ylab("minutos")
+
+```
+
+O desempenho de alguns algoritmos pode ser prejudicado pela presença de variáveis com forte correlação. Mesmo quando isso não ocorre, duas variáveis tão fortemente correlacionadas são redundantes, porque a informação obtida é basicamente a mesma para as duas. Assim, vou remover uma dessas variáveis da tabela de variáveis para análise.
+
+## Turnover mercado
+
+Distribuição da variável por classe de desligamento:
+
+```{r}
+summary(dados$turnover[dados$desligamento=='0'])
+summary(dados$turnover[dados$desligamento=='1'])
+
+ggplot(data = dados, aes(x = desligamento, y = turnover)) + 
+  geom_boxplot() +
+  ggtitle("turnover de mercado por classe de desligamento") +
+  xlab("desligamento") +
+  ylab("%")
+
+```
+
+O desligamento parece associado a um *turnover* de mercado maior.
+
+# Análise
+
+## Remover variáveis 
+
+Remoção de variáveis julgadas desnecessárias:
+
+  - **cargo** e **gestor**: variáveis categóricas com grande número de categorias (dificuldade de avaliação) - substituídas pelo número de "colegas" na categoria
+  - **cargo_num** e **gestor_num**: tentativa (fracassada) de transformas as variáveis categóricas acima em variáveis numéricas
+  - **dist**: fortemente correlacionada com variável **tempo**.
+
+```{r remove_variaveis}
+
+var_remover = c("cargo", "cargo_num", "gestor", "gestor_num",
+                "dist")
+
+dados_limpos = dados[,-which(names(dados) %in% var_remover)]
+```
+
+## Preparação dos dados
+
+Criação de matriz com dados para treinamento de modelos:
+
+```{r}
+dados_limpos_X = model.matrix(desligamento~., dados_limpos)
+dados_limpos_y = dados_limpos$desligamento
+```
+
+Partição entre dados de treino, validação e teste:
+
+```{r}
+indices_treino = createDataPartition(dados_limpos_y, p = 0.8,
+                                     list=FALSE)
+
+dados_treino_X = dados_limpos_X[indices_treino,]
+dados_treino_y = dados_limpos_y[indices_treino]
+
+dados_val_teste_X = dados_limpos_X[-as.vector(indices_treino),]
+dados_val_teste_y = dados_limpos_y[-as.vector(indices_treino)]
+
+indices_valida = createDataPartition(dados_val_teste_y, p=0.5,
+                                     list=FALSE)
+
+dados_valida_X = dados_val_teste_X[indices_valida,]
+dados_valida_y = dados_val_teste_y[as.vector(indices_valida)]
+
+dados_teste_X = dados_val_teste_X[-as.vector(indices_valida),]
+dados_teste_y = dados_val_teste_y[-as.vector(indices_valida)]
+```
+
+## Árvore de decisão com extreme gradient boosting
+
+Treinamento do modelo com lista aleatória de conjunto de parâmetros:
+
+```{r xgboost, warning=FALSE, message=FALSE, results="hide"}
+
+rotulos = as.numeric(dados_treino_y) - 1
+
+iter = 1000
+
+nrounds = rep(NA, iter)
+aucs = rep(NA, iter)
+params_por_modelo = list()
+
+for (indice in 1:iter) {
+  lista_params = list(
+    eta = runif(1),
+    gamma = runif(1, 0, 10),
+    max_depth = sample(1:10, 1),
+    min_child_weight = runif(1, 0, 10),
+    max_delta_step = runif(1, 0, 10)
+  )
+  xgb_modelo = xgb.cv(
+    params=lista_params,
+    data = dados_treino_X,
+    label=rotulos,
+    nfold=10,
+    nrounds=1000,
+    early.stop.round=100,
+    objective="binary:logistic",
+    eval_metric="auc",
+    verbose=FALSE
+  )
+  
+  nrounds[indice] = which.max(xgb_modelo$test.auc.mean)
+  aucs[indice] = xgb_modelo$test.auc.mean[nrounds[indice]]
+  params_por_modelo[[indice]] = lista_params
+  print(aucs[indice])
+}
+
+melhor_modelo = which.max(aucs)
+
+xgb_modelo = xgboost(
+  data=dados_treino_X,
+  label=rotulos,
+  params=params_por_modelo[[melhor_modelo]],
+  nrounds=nrounds[melhor_modelo],
+  objective="binary:logistic",
+  eval_metric="auc"
+)
+
+```
+
+Definição do *cutoff* (probabilidade a partir da qual o modelo considera que haverá desligamento) por meio de análise da curva ROC das previsões feitas para os dados de validação:
+
+```{r, warning=FALSE, message=FALSE, results="hide"}
+
+xgb_valida_probs = predict(xgb_modelo, dados_valida_X)
+
+xgb_valida_pred = prediction(xgb_valida_probs, dados_valida_y)
+
+xgb_valida_roc = performance(xgb_valida_pred, "tpr", "fpr")
+plot(xgb_valida_roc)
+```
+
+Pelo gráfico, podemos alcançar uma taxa de positivos verdadeiros de aproximadamente 80% com uma taxa de positivos falsos de aproximadamente 30%.
+
+```{r}
+indice_cutoff = min(which(round(xgb_valida_roc@y.values[[1]], 1)==0.8))
+
+cutoff = xgb_valida_roc@alpha.values[[1]][indice_cutoff]
+
+```
+
+*Cutoff* escolhido: `r sprintf("%.2f%%", 100*xgb_valida_roc@alpha.values[[1]][indice_cutoff])`
+
+Taxa de positivos verdadeiros: `r sprintf("%.2f%%", 100*xgb_valida_roc@y.values[[1]][indice_cutoff])`
+
+Taxa de positivos falsos: `r sprintf("%.2f%%", 100*xgb_valida_roc@x.values[[1]][indice_cutoff])`
+
+## Análise final
+
+Previsão das classes dos dados de teste (modelo estimado com dados de treino - com hiperparâmetros calculados por validação cruzada -  e *cutoff* calculado com dados de validação):
+
+```{r}
+xgb_teste_probs = 1 - predict(xgb_modelo, dados_teste_X)
+
+xgb_teste_prev = xgb_teste_probs > cutoff
+
+
+table(xgb_teste_prev, dados_teste_y)
+```
+
+# Conclusão
+
+O desempenho do modelo final não é muito bom: apenas metade dos desligados dos dados de teste foram identificados como tais, e quase a metade dos não desligados foram erroneamente classificados.
+
+Algumas melhorias que podem ser feitas incluem:
+
+* Exploração das variáveis categóricas excluídas (**cargo** e **gestor**)
+* Análise da curva de aprendizado do modelo para verificar o trade-off entre viés e variância (ou seja, se precisamos de um modelo mais complexo para reduzir o viés ou de mais dados para reduzir a variância)
+* Uso de outros algoritmos de classificação:
+    * Máquinas de vetores de suporte (*support vector machines*)
+    * Redes neurais
+    * Métodos lineares com penalização de parâmetros
+    * k-vizinhos mais próximos (*k-nearest neighbors*)
