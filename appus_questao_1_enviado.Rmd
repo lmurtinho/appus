@@ -23,7 +23,7 @@ Pasta com os dados.
 
 ```{r pasta}
 rm(list=ls())
-pasta = 'C:/Users/zsj7/Desktop/appus/'
+pasta = 'E:/Drive/appus/'
 ```
 
 ## Carregar módulos
